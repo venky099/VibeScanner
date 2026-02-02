@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vibe Scanner | Advanced Security Engine</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+    
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            /* --- Cyber Palette --- */
+            --bg-deep: #050507;
+            --bg-panel: #0E0E12;
+            
+            --neon-primary: #00f2ff; /* Cyan */
+            --neon-secondary: #7000ff; /* Electric Purple */
+            --neon-danger: #ff0055;  /* Hot Pink/Red */
+            --neon-success: #00ff9d; /* Bright Green */
+            
+            --font-ui: 'Outfit', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        body {
+            background-color: var(--bg-deep);
+            font-family: var(--font-ui);
+            color: #fff;
+            min-height: 100vh;
+            /* Subtle background grid pattern */
+            background-image: 
+                linear-gradient(rgba(112, 0, 255, 0.05) 1px, transparent 1px), 
+                linear-gradient(90deg, rgba(112, 0, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px;
+            overflow-x: hidden;
+        }
+
+        /* --- Ambient Glow --- */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -20%;
+            left: -10%;
+            width: 50%;
+            height: 50%;
+            background: radial-gradient(circle, rgba(0, 242, 255, 0.15), transparent 70%);
+            z-index: -1;
+            filter: blur(80px);
+        }
+        body::after {
+            content: '';
+            position: fixed;
+            bottom: -20%;
+            right: -10%;
+            width: 50%;
+            height: 50%;
+            background: radial-gradient(circle, rgba(112, 0, 255, 0.15), transparent 70%);
+            z-index: -1;
+            filter: blur(80px);
+        }
+
+        /* --- Glassmorphism Components --- */
+        .glass-panel {
+            background: rgba(14, 14, 18, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .navbar {
+            background: rgba(5, 5, 7, 0.85);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .brand-text {
+            font-weight: 700;
+            letter-spacing: 1px;
+            font-size: 1.5rem;
+            background: linear-gradient(45deg, var(--neon-primary), #fff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* --- Input Area --- */
+        .scan-input-group {
+            box-shadow: 0 0 20px rgba(0, 242, 255, 0.05);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        
+        .scan-input-group .form-control {
+            background-color: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-right: none;
+            color: #fff;
+            padding: 18px;
+            font-family: var(--font-mono);
+            font-size: 1rem;
+        }
+        
+        .scan-input-group .form-control:focus {
+            box-shadow: inset 0 0 10px rgba(0, 242, 255, 0.1);
+            border-color: var(--neon-primary);
+        }
+
+        .btn-vibe {
+            background: linear-gradient(90deg, var(--neon-secondary), var(--neon-primary));
+            border: none;
+            color: #fff;
+            font-weight: 600;
+            padding: 0 20px;
+            letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-vibe:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 20px rgba(0, 242, 255, 0.4);
+            color: #fff;
+        }
+
+        /* --- Terminal --- */
+        .terminal-window {
+            background-color: #000;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            font-family: var(--font-mono);
+        }
+        
+        .terminal-header {
+            background: #111;
+            padding: 10px 15px;
+            border-bottom: 1px solid #222;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .terminal-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block;}
+        .dot-red { background: #ff5f56; }
+        .dot-yellow { background: #ffbd2e; }
+        .dot-green { background: #27c93f; }
+
+        .terminal-body {
+            height: 300px;
+            overflow-y: auto;
+            padding: 20px;
+            font-size: 0.9rem;
+            color: var(--neon-success);
+        }
+
+        /* Custom Scrollbar for Terminal */
+        .terminal-body::-webkit-scrollbar { width: 8px; }
+        .terminal-body::-webkit-scrollbar-track { background: #000; }
+        .terminal-body::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+
+        /* --- Vulnerability Cards --- */
+        .vuln-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-left: 4px solid;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(5px);
+        }
+
+        .vuln-card:hover {
+            transform: translateX(5px);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .badge-high { 
+            background: rgba(255, 0, 85, 0.15); 
+            color: var(--neon-danger); 
+            border: 1px solid var(--neon-danger);
+            box-shadow: 0 0 10px rgba(255, 0, 85, 0.2);
+        }
+        .badge-critical { 
+            background: rgba(255, 0, 85, 0.25); 
+            color: #ff0055; 
+            border: 1px solid #ff0055;
+            box-shadow: 0 0 15px rgba(255, 0, 85, 0.4);
+        }
+        .badge-medium { 
+            background: rgba(255, 189, 46, 0.15); 
+            color: #ffbd2e; 
+            border: 1px solid #ffbd2e; 
+        }
+        .badge-low { 
+            background: rgba(0, 255, 157, 0.15); 
+            color: var(--neon-success); 
+            border: 1px solid var(--neon-success); 
+        }
+        .badge-info { 
+            background: rgba(0, 242, 255, 0.15); 
+            color: var(--neon-primary); 
+            border: 1px solid var(--neon-primary); 
+        }
+
+        .payload-box {
+            background: #000;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            word-break: break-all;
+        }
+
+        /* --- Utilities --- */
+        .text-neon-cyan { color: var(--neon-primary); }
+        .text-neon-purple { color: var(--neon-secondary); }
+        
+        .legal-banner {
+            border: 1px solid rgba(255, 189, 46, 0.3);
+            background: rgba(255, 189, 46, 0.05);
+            color: #ffd670;
+        }
+
+        .spinner-scan {
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid var(--neon-primary);
+            border-right-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg fixed-top">
+        <div class="container">
+            <a class="navbar-brand brand-text" href="#">
+                <i class="bi bi-activity me-2"></i>VIBE SCANNER
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/dashboard"><i class="bi bi-graph-up me-1"></i>Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/history"><i class="bi bi-clock-history me-1"></i>History</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/logout"><i class="bi bi-box-arrow-right me-1"></i>Logout</a>
+                    </li>
+                </ul>
+            </div>
+            <div class="d-flex ms-3">
+                <span class="badge bg-dark border border-secondary text-secondary fw-normal font-monospace">v2.0.1</span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container" style="margin-top: 120px;">
+
+        <section class="text-center mb-5">
+            <h1 class="display-4 fw-bold mb-3">Target Analysis <span class="text-neon-cyan">System</span></h1>
+            <p class="text-secondary mb-5" style="font-size: 1.1rem; max-width: 600px; margin: 0 auto;">
+                Perform advanced vulnerability reconnaissance with real-time feedback. 
+                Enter your target URL below to initialize the scan engine.
+            </p>
+            
+            <div class="row justify-content-center">
+                <div class="col-lg-8">
+                    <div class="input-group scan-input-group mb-4">
+                        <span class="input-group-text bg-transparent border-secondary text-secondary border-end-0">
+                            <i class="bi bi-globe"></i>
+                        </span>
+                        <input type="text" id="urlInput" class="form-control" placeholder="https://target-system.com">
+                        <button class="btn btn-vibe" type="button" onclick="startScan()">
+                            INITIATE SCAN <i class="bi bi-arrow-right ms-2"></i>
+                        </button>
+                    </div>
+
+                    <div class="legal-banner p-2 rounded d-flex align-items-center justify-content-center gap-2" style="font-size: 0.85rem;">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <span><strong>Authorization Required:</strong> Only scan targets you own or have explicit permission to test.</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="mb-5">
+            <div class="d-flex justify-content-between align-items-center mb-3 px-2">
+                <h6 class="m-0 text-uppercase text-secondary fw-bold text-spacing-2">
+                    <i class="bi bi-terminal-fill me-2"></i>Live Execution Logs
+                </h6>
+                <span id="scanStatus" style="display: none;">
+                    <div class="d-flex align-items-center text-neon-cyan small">
+                        <div class="spinner-scan me-2"></div>
+                        <span>Scanning website...</span>
+                    </div>
+                </span>
+            </div>
+            
+            <div class="terminal-window">
+                <div class="terminal-header">
+                    <span class="terminal-dot dot-red"></span>
+                    <span class="terminal-dot dot-yellow"></span>
+                    <span class="terminal-dot dot-green"></span>
+                    <span class="text-secondary ms-2 small font-monospace opacity-50">root@vibe-engine:~</span>
+                </div>
+                <div class="terminal-body" id="terminalContent">
+                    <span class="text-secondary opacity-50">$ waiting for target input...</span>
+                </div>
+            </div>
+        </section>
+
+        <section id="resultsSection" class="mb-5" style="display:none;">
+            <div class="glass-panel p-4 rounded-3 mb-4">
+                <div class="d-flex justify-content-between align-items-end mb-4 border-bottom border-secondary border-opacity-25 pb-3">
+                     <div>
+                        <h3 class="fw-bold m-0">Vulnerability Report</h3>
+                        <p class="text-secondary m-0 mt-1">Issues Detected: <span id="vulnCount" class="text-neon-danger fw-bold font-monospace fs-5">0</span></p>
+                     </div>
+                     <a id="downloadBtn" href="#" class="btn btn-sm btn-outline-light">
+                        <i class="bi bi-file-earmark-pdf me-2"></i>Export Report
+                     </a>
+                </div>
+    
+                <div id="vulnList" class="vuln-list">
+                    </div>
+            </div>
+        </section>
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // --- Security Helper ---
+        function escapeHtml(text) {
+            if (!text) return text;
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // --- Main Scan Logic ---
+        function startScan() {
+            const urlInput = document.getElementById('urlInput');
+            const url = urlInput.value;
+            
+            // UI References
+            const terminal = document.getElementById('terminalContent');
+            const status = document.getElementById('scanStatus');
+            const resultsSection = document.getElementById('resultsSection');
+            const vulnList = document.getElementById('vulnList');
+            const downloadBtn = document.getElementById('downloadBtn');
+            const vulnCountSpan = document.getElementById('vulnCount');
+
+            if(!url) {
+                alert("Please enter a valid URL.");
+                return;
+            }
+
+            // Reset UI with styling
+            terminal.innerHTML = '<span class="text-white">$ initializing scan sequence on ' + escapeHtml(url) + '...</span><br>';
+            vulnList.innerHTML = '';
+            resultsSection.style.display = 'none';
+            status.style.display = 'inline-block';
+            let vulnCount = 0;
+
+            // Simulated Connection (Replace with real EventSource)
+            // Note: Since I cannot run the backend, this assumes your previous backend logic exists.
+            const eventSource = new EventSource(`/scan_stream?url=${encodeURIComponent(url)}`);
+
+            eventSource.onmessage = function(event) {
+                const data = event.data;
+
+                // --- Scan Finished ---
+                if (data.includes("[DONE]")) {
+                    eventSource.close();
+                    logToTerminal("Scan complete. Connection terminated.", "text-white");
+                    status.style.display = 'none';
+                    
+                    if (vulnCount > 0) {
+                        resultsSection.style.display = 'block';
+                        downloadBtn.href = `/download_pdf?url=${encodeURIComponent(url)}`;
+                        
+                        // Add message to view in history
+                        const historyMsg = document.createElement('div');
+                        historyMsg.className = 'text-success mb-3 p-2 bg-success bg-opacity-10 rounded';
+                        historyMsg.innerHTML = '<i class="bi bi-check-circle me-2"></i><strong>Scan Complete!</strong> Vulnerabilities have been saved. <a href="/history" class="text-success fw-bold">View in History</a>';
+                        resultsSection.querySelector('.glass-panel').prepend(historyMsg);
+                        
+                        // Smooth scroll to results
+                        resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    } else {
+                        logToTerminal("Target Passed. No threats detected.", "text-neon-cyan");
+                        
+                        // Still show option to view history
+                        resultsSection.style.display = 'block';
+                        const noVulnMsg = document.createElement('div');
+                        noVulnMsg.className = 'alert alert-success';
+                        noVulnMsg.innerHTML = '<i class="bi bi-shield-check me-2"></i><strong>No vulnerabilities found!</strong> The target appears secure. <a href="/history" class="alert-link fw-bold">View Scan History</a>';
+                        resultsSection.querySelector('.glass-panel').prepend(noVulnMsg);
+                    }
+                    return;
+                }
+
+                // --- Vulnerability Found ---
+                if (data.includes("[VULN]")) {
+                    const jsonStr = data.replace("[VULN] ", "");
+                    const vuln = JSON.parse(jsonStr);
+                    
+                    logToTerminal(`[ALERT] ${vuln.type} detected at ${vuln.url}`, "text-neon-danger fw-bold");
+                    
+                    vulnCount++;
+                    vulnCountSpan.innerText = vulnCount;
+                    resultsSection.style.display = 'block';
+
+                    let borderClass = '#ffbd2e'; // Medium
+                    let badgeClass = 'badge-medium';
+                    let iconClass = 'bi-bug';
+                    let textClass = 'text-warning';
+                    
+                    if(vuln.risk === 'Critical') {
+                        borderClass = '#ff0055';
+                        badgeClass = 'badge-critical';
+                        iconClass = 'bi-radioactive';
+                        textClass = 'text-danger';
+                    } else if(vuln.risk === 'High') {
+                        borderClass = 'var(--neon-danger)';
+                        badgeClass = 'badge-high';
+                        iconClass = 'bi-radioactive';
+                        textClass = 'text-danger';
+                    } else if(vuln.risk === 'Low') {
+                        borderClass = 'var(--neon-success)';
+                        badgeClass = 'badge-low';
+                        iconClass = 'bi-shield-check';
+                        textClass = 'text-success';
+                    } else if(vuln.risk === 'Info') {
+                        borderClass = 'var(--neon-primary)';
+                        badgeClass = 'badge-info';
+                        iconClass = 'bi-info-circle';
+                        textClass = 'text-info';
+                    }
+
+                    const cardId = 'vuln-' + vulnCount;
+                    const card = document.createElement('div');
+                    card.className = 'vuln-card';
+                    card.style.borderLeftColor = borderClass;
+                    
+                    card.innerHTML = `
+                        <div class="p-3 d-flex justify-content-between align-items-center" data-bs-toggle="collapse" data-bs-target="#${cardId}" style="cursor:pointer">
+                            <div class="d-flex align-items-center">
+                                <div class="me-3 fs-4 ${textClass}"><i class="bi ${iconClass}"></i></div>
+                                <div>
+                                    <div class="fw-bold fs-5">${vuln.type}</div>
+                                    <small class="text-secondary font-mono">${escapeHtml(vuln.url)}</small>
+                                </div>
+                            </div>
+                            <span class="badge ${badgeClass} rounded-pill px-3 py-2 font-mono">${vuln.risk.toUpperCase()}</span>
+                        </div>
+                        <div id="${cardId}" class="collapse">
+                            <div class="card-body bg-black bg-opacity-50 p-3 border-top border-secondary border-opacity-10">
+                                <p class="mb-1 small text-secondary text-uppercase fw-bold">Injection Payload:</p>
+                                <div class="payload-box mb-3">${escapeHtml(vuln.payload)}</div>
+                                <div class="d-flex justify-content-end">
+                                    <small class="text-muted fst-italic">Details captured in PDF report</small>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    vulnList.appendChild(card);
+                } 
+                
+                // --- Info Log ---
+                else if (data.includes("[INFO]")) {
+                    const msg = data.replace("[INFO] ", "");
+                    logToTerminal(msg, "text-secondary");
+                }
+            };
+
+            eventSource.onerror = function() {
+                logToTerminal("CRITICAL: Server connection lost.", "text-neon-danger");
+                status.style.display = 'none';
+                eventSource.close();
+            };
+        }
+
+        function logToTerminal(message, cssClass) {
+            const terminal = document.getElementById('terminalContent');
+            const div = document.createElement("div");
+            div.className = cssClass || "text-secondary";
+            // Timestamp
+            const time = new Date().toLocaleTimeString('en-US', {hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit'});
+            div.innerHTML = `<span class="opacity-50 me-2">[${time}]</span> ` + message;
+            terminal.appendChild(div);
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+    </script>
+</body>
+</html>

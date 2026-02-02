@@ -1,0 +1,12 @@
+flask
+requests
+beautifulsoup4
+fpdf
+gunicorn
+sqlalchemy
+flask-sqlalchemy
+flask-login
+flask-wtf
+wtforms
+email-validator
+werkzeug
