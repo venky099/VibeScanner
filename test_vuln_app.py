@@ -1,4 +1,4 @@
-from flask import Flask, request, Response
+from flask import Flask, request, Response, redirect
 import time
 
 app = Flask(__name__)
@@ -16,6 +16,7 @@ def index():
           <li><a href="/sqli?id=1">SQLi error test</a></li>
           <li><a href="/sqli_bool?id=1">SQLi boolean test</a></li>
           <li><a href="/sqli_time?id=1">SQLi time-based test</a></li>
+          <li><a href="/redirect?next=/safe-landing">Open redirect test</a></li>
           <li><a href="/help?topic=intro">False-positive SQL wording test</a></li>
           <li><a href="/forms">Form tests</a></li>
         </ul>
@@ -77,6 +78,17 @@ def sqli_time():
     return "<html><body><h2>Product 1</h2><div>Delayed lookup</div></body></html>"
 
 
+@app.route("/redirect")
+def open_redirect():
+    target = request.args.get("next", "/safe-landing")
+    return redirect(target, code=302)
+
+
+@app.route("/safe-landing")
+def safe_landing():
+    return "<html><body><h2>Safe landing page</h2></body></html>"
+
+
 @app.route("/help")
 def help_page():
     topic = request.args.get("topic", "intro")
@@ -108,6 +120,10 @@ def forms():
           <input type="text" name="username" />
           <input type="password" name="password" />
           <input type="submit" value="Delayed Login" />
+        </form>
+        <form action="/bounce" method="get">
+          <input type="text" name="next" />
+          <input type="submit" value="Continue" />
         </form>
       </body>
     </html>
@@ -144,6 +160,12 @@ def login_time():
         return "<html><body>Login failed</body></html>"
 
     return "<html><body>Login failed</body></html>"
+
+
+@app.route("/bounce", methods=["GET"])
+def bounce():
+    target = request.args.get("next", "/safe-landing")
+    return redirect(target, code=302)
 
 
 if __name__ == "__main__":

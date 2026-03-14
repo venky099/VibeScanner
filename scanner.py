@@ -113,6 +113,36 @@ SQLI_TIME_TEMPLATES = [
         "control": "{base}'; WAITFOR DELAY '0:0:0'--"
     }
 ]
+OPEN_REDIRECT_PAYLOADS = [
+    {
+        "label": "absolute external redirect",
+        "value": "https://vibescanner.invalid/redirect-check"
+    },
+    {
+        "label": "scheme-relative external redirect",
+        "value": "//vibescanner.invalid/redirect-check"
+    }
+]
+OPEN_REDIRECT_FIELD_HINTS = (
+    "next",
+    "url",
+    "uri",
+    "redirect",
+    "return",
+    "returnto",
+    "return_to",
+    "redirecturi",
+    "redirect_uri",
+    "redirecturl",
+    "redirect_url",
+    "dest",
+    "destination",
+    "continue",
+    "callback",
+    "goto",
+    "target",
+    "out",
+)
 
 XSS_DANGEROUS_TAGS = {"script", "img", "svg", "iframe", "body", "input"}
 XSS_DANGEROUS_ATTRS = {"src", "href", "srcdoc", "action", "formaction"}
@@ -186,6 +216,28 @@ CVSS_SCORES = {
         "user_interaction": "Required",
         "impact": "Low (Confidentiality, Integrity)",
         "description": "Allows attacker to execute scripts in victim's browser via form input"
+    },
+
+    # Open Redirect Vulnerabilities
+    "Open Redirect (URL Parameter)": {
+        "base_score": 4.7,
+        "severity": "Medium",
+        "attack_vector": "Network",
+        "attack_complexity": "Low",
+        "privileges_required": "None",
+        "user_interaction": "Required",
+        "impact": "Low (Confidentiality, Integrity)",
+        "description": "Allows attackers to redirect victims to attacker-controlled external destinations"
+    },
+    "Open Redirect (Form)": {
+        "base_score": 4.7,
+        "severity": "Medium",
+        "attack_vector": "Network",
+        "attack_complexity": "Low",
+        "privileges_required": "None",
+        "user_interaction": "Required",
+        "impact": "Low (Confidentiality, Integrity)",
+        "description": "Allows attackers to redirect victims to attacker-controlled external destinations via form input"
     },
     
     # Security Header Vulnerabilities
@@ -702,23 +754,33 @@ class VulnerabilityScanner:
                     data[input_data["name"]] = value
         return target_url, data
 
-    def submit_form(self, form_details, url, value, target_field=None):
+    def submit_form(self, form_details, url, value, target_field=None, allow_redirects=True):
         target_url, data = self._build_form_submission(form_details, url, value, target_field=target_field)
         try:
             if form_details["method"] == "post":
-                return self.session.post(target_url, data=data, timeout=7)
-            return self.session.get(target_url, params=data, timeout=7)
+                return self.session.post(target_url, data=data, timeout=7, allow_redirects=allow_redirects)
+            return self.session.get(target_url, params=data, timeout=7, allow_redirects=allow_redirects)
         except:
             return None
 
-    def timed_submit_form(self, form_details, url, value, target_field=None):
+    def timed_submit_form(self, form_details, url, value, target_field=None, allow_redirects=True):
         target_url, data = self._build_form_submission(form_details, url, value, target_field=target_field)
         start = time.perf_counter()
         try:
             if form_details["method"] == "post":
-                response = self.session.post(target_url, data=data, timeout=SQLI_TIME_REQUEST_TIMEOUT_SECONDS)
+                response = self.session.post(
+                    target_url,
+                    data=data,
+                    timeout=SQLI_TIME_REQUEST_TIMEOUT_SECONDS,
+                    allow_redirects=allow_redirects
+                )
             else:
-                response = self.session.get(target_url, params=data, timeout=SQLI_TIME_REQUEST_TIMEOUT_SECONDS)
+                response = self.session.get(
+                    target_url,
+                    params=data,
+                    timeout=SQLI_TIME_REQUEST_TIMEOUT_SECONDS,
+                    allow_redirects=allow_redirects
+                )
         except:
             return None, None
         return response, time.perf_counter() - start
@@ -926,7 +988,30 @@ class VulnerabilityScanner:
 
         return vuln
 
-    def _request_url_param_value(self, url, param_name, value):
+    def build_open_redirect_vulnerability(self, vuln_type, url, payload, parameter=None, confidence="High", evidence=None):
+        cvss = get_cvss_info(vuln_type)
+        scope = f"parameter '{parameter}'" if parameter else "submitted input"
+        vuln = {
+            "type": vuln_type,
+            "url": url,
+            "payload": payload,
+            "risk": cvss["severity"],
+            "cvss_score": cvss["base_score"],
+            "attack_vector": cvss["attack_vector"],
+            "attack_complexity": cvss["attack_complexity"],
+            "privileges_required": cvss["privileges_required"],
+            "user_interaction": cvss["user_interaction"],
+            "description": f"Attacker-controlled redirect behavior was observed for {scope}, which is consistent with an open redirect.",
+            "confidence": confidence,
+            "detection_method": "redirect-based"
+        }
+
+        if evidence:
+            vuln["evidence"] = evidence
+
+        return vuln
+
+    def _request_url_param_value(self, url, param_name, value, allow_redirects=True):
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
 
@@ -939,7 +1024,7 @@ class VulnerabilityScanner:
         new_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
 
         try:
-            return self.session.get(new_url, timeout=7)
+            return self.session.get(new_url, timeout=7, allow_redirects=allow_redirects)
         except:
             return None
         finally:
@@ -969,6 +1054,70 @@ class VulnerabilityScanner:
             return self.timed_get(new_url, timeout=SQLI_TIME_REQUEST_TIMEOUT_SECONDS)
         finally:
             params[param_name] = original_value
+
+    def is_redirect_candidate_field(self, input_name, input_type=None):
+        field_name = (input_name or "").lower().replace("-", "").replace(".", "").replace(" ", "")
+        input_type = (input_type or "").lower()
+
+        if input_type == "url":
+            return True
+
+        return any(hint in field_name for hint in OPEN_REDIRECT_FIELD_HINTS)
+
+    def extract_redirect_target(self, response):
+        if response is None:
+            return None, None
+
+        location = response.headers.get("Location")
+        if location and 300 <= response.status_code < 400:
+            return urljoin(response.url or self.target_url, location.strip()), "location-header"
+
+        content_type = response.headers.get("Content-Type", "").lower()
+        if "html" not in content_type:
+            return None, None
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        meta_refresh = soup.find("meta", attrs={"http-equiv": re.compile(r"^refresh$", re.IGNORECASE)})
+        if not meta_refresh:
+            return None, None
+
+        content = meta_refresh.get("content", "")
+        match = re.search(r"url\s*=\s*(.+)$", content, re.IGNORECASE)
+        if not match:
+            return None, None
+
+        target = match.group(1).strip().strip("'\"")
+        if not target:
+            return None, None
+
+        return urljoin(response.url or self.target_url, target), "meta-refresh"
+
+    def analyze_open_redirect(self, response, payload_value, baseline_response=None):
+        redirect_target, redirect_source = self.extract_redirect_target(response)
+        if not redirect_target:
+            return None
+
+        expected_target = urljoin(response.url or self.target_url, payload_value)
+        redirect_parsed = urlparse(redirect_target)
+        expected_parsed = urlparse(expected_target)
+
+        if not redirect_parsed.hostname or redirect_parsed.hostname.lower() != (expected_parsed.hostname or "").lower():
+            return None
+
+        baseline_target, _ = self.extract_redirect_target(baseline_response)
+        if baseline_target:
+            baseline_host = urlparse(baseline_target).hostname or ""
+            if baseline_host.lower() == (expected_parsed.hostname or "").lower():
+                return None
+
+        confidence = "High" if redirect_source == "location-header" else "Medium"
+        return {
+            "confidence": confidence,
+            "redirect_target": redirect_target,
+            "expected_target": expected_target,
+            "redirect_source": redirect_source,
+            "status_code": getattr(response, "status_code", None),
+        }
 
     def is_vulnerable_to_xss(self, response, payload, baseline_response=None):
         if response is None or payload not in response.text:
@@ -1138,6 +1287,41 @@ class VulnerabilityScanner:
 
         return None
 
+    def detect_open_redirect_in_url(self, url):
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+
+        if not params:
+            return None
+
+        baseline_response = None
+        try:
+            baseline_response = self.session.get(url, timeout=7, allow_redirects=False)
+        except:
+            pass
+
+        for param in params.keys():
+            for payload_spec in OPEN_REDIRECT_PAYLOADS:
+                response = self._request_url_param_value(
+                    url,
+                    param,
+                    payload_spec["value"],
+                    allow_redirects=False
+                )
+                evidence = self.analyze_open_redirect(response, payload_spec["value"], baseline_response)
+                if evidence:
+                    evidence["technique"] = payload_spec["label"]
+                    return self.build_open_redirect_vulnerability(
+                        "Open Redirect (URL Parameter)",
+                        url,
+                        f"[{param}] {payload_spec['value']}",
+                        parameter=param,
+                        confidence=evidence["confidence"],
+                        evidence=evidence
+                    )
+
+        return None
+
     def scan_lfi_url_parameters(self, url, payload):
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
@@ -1266,6 +1450,47 @@ class VulnerabilityScanner:
                         payload,
                         parameter=field_name,
                         detection_method="time-based",
+                        confidence=evidence["confidence"],
+                        evidence=evidence
+                    )
+
+        return None
+
+    def detect_open_redirect_in_form(self, form_details, url):
+        candidate_fields = [
+            input_data for input_data in form_details["inputs"]
+            if input_data["type"] not in ['submit', 'image', 'button', 'file', 'reset', 'hidden']
+            and self.is_redirect_candidate_field(input_data["name"], input_data["type"])
+        ]
+        if not candidate_fields:
+            return None
+
+        for input_data in candidate_fields:
+            field_name = input_data["name"]
+            baseline_response = self.submit_form(
+                form_details,
+                url,
+                self.default_form_input_value(input_data["type"], field_name),
+                target_field=field_name,
+                allow_redirects=False
+            )
+
+            for payload_spec in OPEN_REDIRECT_PAYLOADS:
+                response = self.submit_form(
+                    form_details,
+                    url,
+                    payload_spec["value"],
+                    target_field=field_name,
+                    allow_redirects=False
+                )
+                evidence = self.analyze_open_redirect(response, payload_spec["value"], baseline_response)
+                if evidence:
+                    evidence["technique"] = payload_spec["label"]
+                    return self.build_open_redirect_vulnerability(
+                        "Open Redirect (Form)",
+                        url,
+                        f"[{field_name}] {payload_spec['value']}",
+                        parameter=field_name,
                         confidence=evidence["confidence"],
                         evidence=evidence
                     )
@@ -1542,8 +1767,14 @@ class VulnerabilityScanner:
                     vuln = self.detect_sqli_in_url(link)
                     if vuln:
                         yield f"data: [VULN] {json.dumps(vuln)}\n\n"
+
+                # B. Scan URL Params for Open Redirect
+                if "?" in link:
+                    open_redirect_vuln = self.detect_open_redirect_in_url(link)
+                    if open_redirect_vuln:
+                        yield f"data: [VULN] {json.dumps(open_redirect_vuln)}\n\n"
                 
-                # B. Scan URL Params for XSS
+                # C. Scan URL Params for XSS
                 if "?" in link:
                     for payload in xss_payloads:
                         res, param = self.scan_xss_url_parameters(link, payload)
@@ -1564,7 +1795,7 @@ class VulnerabilityScanner:
                             yield f"data: [VULN] {json.dumps(vuln)}\n\n"
                             break
 
-                # C. Scan URL Params for LFI
+                # D. Scan URL Params for LFI
                 if "?" in link:
                     for payload in lfi_payloads:
                         res, param = self.scan_lfi_url_parameters(link, payload)
@@ -1585,7 +1816,7 @@ class VulnerabilityScanner:
                             yield f"data: [VULN] {json.dumps(vuln)}\n\n"
                             break
                 
-                # D. Scan Forms
+                # E. Scan Forms
                 forms = self.get_forms(link)
                 for form in forms:
                     details = self.form_details(form)
@@ -1595,6 +1826,11 @@ class VulnerabilityScanner:
                     sqli_vuln = self.detect_sqli_in_form(details, link)
                     if sqli_vuln:
                         yield f"data: [VULN] {json.dumps(sqli_vuln)}\n\n"
+
+                    # Open Redirect on Forms
+                    open_redirect_form_vuln = self.detect_open_redirect_in_form(details, link)
+                    if open_redirect_form_vuln:
+                        yield f"data: [VULN] {json.dumps(open_redirect_form_vuln)}\n\n"
 
                     # XSS on Forms
                     for field_name in attackable_fields:

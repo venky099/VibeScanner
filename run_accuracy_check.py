@@ -47,6 +47,8 @@ def main():
         "boolean_sqli": any(v.get("detection_method") == "boolean-based" and "/sqli_bool" in v.get("url", "") for v in findings),
         "time_sqli_url": any(v.get("detection_method") == "time-based" and "/sqli_time" in v.get("url", "") for v in findings),
         "form_sqli": any(v.get("type") == "SQL Injection (Form)" for v in findings),
+        "open_redirect_url": any(v.get("type") == "Open Redirect (URL Parameter)" and "/redirect" in v.get("url", "") for v in findings),
+        "open_redirect_form": any(v.get("type") == "Open Redirect (Form)" and "/forms" in v.get("url", "") for v in findings),
         "time_sqli_form": any(
             v.get("type") == "SQL Injection (Form)"
             and v.get("detection_method") == "time-based"

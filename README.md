@@ -6,6 +6,7 @@ VibeScanner is a Flask-based web vulnerability scanner with user accounts, live 
 
 - Reflected XSS detection
 - Error-based, boolean-based, and time-based SQL injection detection
+- Open Redirect detection for URL parameters and forms
 - Form-based testing with per-field payload targeting
 - Security header checks
 - Sensitive file exposure checks
