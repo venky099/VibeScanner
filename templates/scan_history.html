@@ -277,6 +277,46 @@
             background: linear-gradient(90deg, var(--neon-secondary), var(--neon-primary));
             border-color: transparent;
         }
+
+        .detail-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-left: 3px solid var(--neon-primary);
+            border-radius: 10px;
+            padding: 18px;
+            margin-bottom: 16px;
+        }
+
+        .detail-card.risk-critical,
+        .detail-card.risk-high {
+            border-left-color: var(--neon-danger);
+        }
+
+        .detail-card.risk-medium {
+            border-left-color: #ffc107;
+        }
+
+        .detail-card.risk-low {
+            border-left-color: var(--neon-success);
+        }
+
+        .detail-code,
+        .detail-evidence {
+            background: rgba(0, 0, 0, 0.28);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            color: var(--neon-primary);
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            padding: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .detail-meta {
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body>
@@ -380,11 +420,46 @@
             </div>
         </div>
     </div>
+
+    <div class="modal fade" id="detailsModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content" style="background: rgba(14, 14, 18, 0.97); border: 1px solid rgba(255, 255, 255, 0.1);">
+                <div class="modal-header border-0">
+                    <h5 class="modal-title">Scan Details</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="detailsModalBody">
+                    <p class="text-muted mb-0">Loading details...</p>
+                </div>
+            </div>
+        </div>
+    </div>
     
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let currentPage = 1;
         let currentScanId = null;
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function formatEvidence(evidence) {
+            if (!evidence) {
+                return '<p class="text-muted mb-0">No evidence stored for this finding.</p>';
+            }
+
+            if (typeof evidence === 'object') {
+                return `<div class="detail-evidence">${escapeHtml(JSON.stringify(evidence, null, 2))}</div>`;
+            }
+
+            return `<div class="detail-evidence">${escapeHtml(evidence)}</div>`;
+        }
         
         async function loadStats() {
             try {
@@ -456,6 +531,9 @@
                                     <button class="btn-action btn-pdf" onclick="downloadPDF(${scan.id})" title="Download PDF">
                                         <i class="bi bi-file-pdf"></i>
                                     </button>
+                                    <button class="btn-action btn-export" onclick="showScanDetails(${scan.id})" title="View details">
+                                        <i class="bi bi-eye"></i>
+                                    </button>
                                     <button class="btn-action btn-export" onclick="showExportModal(${scan.id})" title="Export">
                                         <i class="bi bi-download"></i>
                                     </button>
@@ -505,6 +583,62 @@
             document.getElementById('exportHTML').href = `/api/scan/${scanId}/export?format=html`;
             
             new bootstrap.Modal(document.getElementById('exportModal')).show();
+        }
+
+        async function showScanDetails(scanId) {
+            const modalBody = document.getElementById('detailsModalBody');
+            modalBody.innerHTML = '<p class="text-muted mb-0">Loading details...</p>';
+
+            try {
+                const response = await fetch(`/api/scan/${scanId}`);
+                if (!response.ok) {
+                    throw new Error('Failed to load scan details');
+                }
+
+                const scan = await response.json();
+                const summaryHtml = `
+                    <div class="mb-4">
+                        <h4 class="mb-2">${escapeHtml(scan.target_url)}</h4>
+                        <p class="detail-meta mb-1"><strong>Status:</strong> ${escapeHtml(scan.status)}</p>
+                        <p class="detail-meta mb-1"><strong>Scan Date:</strong> ${escapeHtml(new Date(scan.scan_date).toLocaleString())}</p>
+                        <p class="detail-meta mb-0"><strong>Total Vulnerabilities:</strong> ${escapeHtml(scan.total_vulnerabilities)}</p>
+                    </div>
+                `;
+
+                if (!scan.vulnerabilities || scan.vulnerabilities.length === 0) {
+                    modalBody.innerHTML = summaryHtml + '<p class="text-muted mb-0">No vulnerabilities were stored for this scan.</p>';
+                    new bootstrap.Modal(document.getElementById('detailsModal')).show();
+                    return;
+                }
+
+                const findingsHtml = scan.vulnerabilities.map(vuln => `
+                    <div class="detail-card risk-${String(vuln.risk || 'info').toLowerCase()}">
+                        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-2">
+                            <h5 class="mb-0">${escapeHtml(vuln.type || 'Finding')}</h5>
+                            <span class="badge text-bg-dark border border-secondary">${escapeHtml(vuln.risk || 'Info')}</span>
+                        </div>
+                        <p class="detail-meta mb-2"><strong>URL:</strong> ${escapeHtml(vuln.affected_url || 'N/A')}</p>
+                        <p class="detail-meta mb-2"><strong>Description:</strong> ${escapeHtml(vuln.description || 'No description available.')}</p>
+                        <p class="detail-meta mb-2"><strong>Confidence:</strong> ${escapeHtml(vuln.confidence || 'N/A')}</p>
+                        <p class="detail-meta mb-3"><strong>Detection Method:</strong> ${escapeHtml(vuln.detection_method || 'N/A')}</p>
+                        <div class="mb-3">
+                            <div class="detail-meta mb-2"><strong>Payload</strong></div>
+                            <div class="detail-code">${escapeHtml(vuln.payload || 'N/A')}</div>
+                        </div>
+                        <div>
+                            <div class="detail-meta mb-2"><strong>Evidence</strong></div>
+                            ${formatEvidence(vuln.evidence)}
+                        </div>
+                    </div>
+                `).join('');
+
+                modalBody.innerHTML = summaryHtml + findingsHtml;
+                new bootstrap.Modal(document.getElementById('detailsModal')).show();
+            } catch (error) {
+                console.error('Error loading scan details:', error);
+                modalBody.innerHTML = '<p class="text-danger mb-0">Unable to load scan details right now.</p>';
+                new bootstrap.Modal(document.getElementById('detailsModal')).show();
+            }
         }
         
         function rescanURL(url) {

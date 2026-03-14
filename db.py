@@ -3,6 +3,7 @@ from flask_login import UserMixin
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 import json
+from sqlalchemy import inspect, text
 from logger_config import get_logger
 
 logger = get_logger(__name__)
@@ -84,10 +85,20 @@ class Vulnerability(db.Model):
     description = db.Column(db.Text)
     affected_url = db.Column(db.String(500))
     payload = db.Column(db.Text)  # The actual payload used
+    confidence = db.Column(db.String(20))
+    detection_method = db.Column(db.String(50))
+    evidence = db.Column(db.Text)
     
     detected_date = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     
     def to_dict(self):
+        parsed_evidence = None
+        if self.evidence:
+            try:
+                parsed_evidence = json.loads(self.evidence)
+            except (TypeError, json.JSONDecodeError):
+                parsed_evidence = self.evidence
+
         return {
             'id': self.id,
             'type': self.type,
@@ -95,6 +106,9 @@ class Vulnerability(db.Model):
             'description': self.description,
             'affected_url': self.affected_url,
             'payload': self.payload,
+            'confidence': self.confidence,
+            'detection_method': self.detection_method,
+            'evidence': parsed_evidence,
             'detected_date': self.detected_date.isoformat()
         }
     
@@ -106,4 +120,22 @@ def init_db(app):
     """Initialize the database"""
     with app.app_context():
         db.create_all()
+        inspector = inspect(db.engine)
+        existing_columns = {column['name'] for column in inspector.get_columns('vulnerabilities')}
+        schema_updates = []
+
+        if 'confidence' not in existing_columns:
+            schema_updates.append("ALTER TABLE vulnerabilities ADD COLUMN confidence VARCHAR(20)")
+        if 'detection_method' not in existing_columns:
+            schema_updates.append("ALTER TABLE vulnerabilities ADD COLUMN detection_method VARCHAR(50)")
+        if 'evidence' not in existing_columns:
+            schema_updates.append("ALTER TABLE vulnerabilities ADD COLUMN evidence TEXT")
+
+        for statement in schema_updates:
+            db.session.execute(text(statement))
+
+        if schema_updates:
+            db.session.commit()
+            logger.info("Applied vulnerability table schema updates: confidence, detection_method, evidence")
+
         logger.info("Database tables created successfully!")

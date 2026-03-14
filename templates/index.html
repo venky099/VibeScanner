@@ -291,6 +291,15 @@
                         <i class="bi bi-exclamation-triangle"></i>
                         <span><strong>Authorization Required:</strong> Only scan targets you own or have explicit permission to test.</span>
                     </div>
+
+                    <div class="mt-3 d-flex justify-content-center">
+                        <div class="form-check form-switch text-secondary small">
+                            <input class="form-check-input" type="checkbox" role="switch" id="passiveChecksToggle">
+                            <label class="form-check-label" for="passiveChecksToggle">
+                                Include passive hardening checks
+                            </label>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -358,6 +367,8 @@
         function startScan() {
             const urlInput = document.getElementById('urlInput');
             const url = urlInput.value;
+            const passiveChecksToggle = document.getElementById('passiveChecksToggle');
+            const includePassiveChecks = passiveChecksToggle ? passiveChecksToggle.checked : true;
             
             // UI References
             const terminal = document.getElementById('terminalContent');
@@ -378,10 +389,15 @@
             resultsSection.style.display = 'none';
             status.style.display = 'inline-block';
             let vulnCount = 0;
+            let currentScanId = null;
 
             // Simulated Connection (Replace with real EventSource)
             // Note: Since I cannot run the backend, this assumes your previous backend logic exists.
-            const eventSource = new EventSource(`/scan_stream?url=${encodeURIComponent(url)}`);
+            const params = new URLSearchParams({
+                url,
+                include_passive_checks: includePassiveChecks ? '1' : '0'
+            });
+            const eventSource = new EventSource(`/scan_stream?${params.toString()}`);
 
             eventSource.onmessage = function(event) {
                 const data = event.data;
@@ -394,7 +410,13 @@
                     
                     if (vulnCount > 0) {
                         resultsSection.style.display = 'block';
-                        downloadBtn.href = `/download_pdf?url=${encodeURIComponent(url)}`;
+                        if (currentScanId) {
+                            downloadBtn.href = `/download_pdf?scan_id=${encodeURIComponent(currentScanId)}`;
+                            downloadBtn.classList.remove('disabled');
+                        } else {
+                            downloadBtn.href = '#';
+                            downloadBtn.classList.add('disabled');
+                        }
                         
                         // Add message to view in history
                         const historyMsg = document.createElement('div');
@@ -414,6 +436,12 @@
                         noVulnMsg.innerHTML = '<i class="bi bi-shield-check me-2"></i><strong>No vulnerabilities found!</strong> The target appears secure. <a href="/history" class="alert-link fw-bold">View Scan History</a>';
                         resultsSection.querySelector('.glass-panel').prepend(noVulnMsg);
                     }
+                    return;
+                }
+
+                if (data.includes("[SCAN]")) {
+                    const scanMeta = JSON.parse(data.replace("[SCAN] ", ""));
+                    currentScanId = scanMeta.scan_id;
                     return;
                 }
 
@@ -473,6 +501,8 @@
                         </div>
                         <div id="${cardId}" class="collapse">
                             <div class="card-body bg-black bg-opacity-50 p-3 border-top border-secondary border-opacity-10">
+                                ${vuln.description ? `<p class="mb-3 text-secondary">${escapeHtml(vuln.description)}</p>` : ''}
+                                ${vuln.confidence ? `<p class="mb-3 small text-uppercase text-secondary fw-bold">Confidence: <span class="text-white">${escapeHtml(vuln.confidence)}</span></p>` : ''}
                                 <p class="mb-1 small text-secondary text-uppercase fw-bold">Injection Payload:</p>
                                 <div class="payload-box mb-3">${escapeHtml(vuln.payload)}</div>
                                 <div class="d-flex justify-content-end">

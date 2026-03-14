@@ -7,23 +7,110 @@ import json
 import io
 from fpdf import FPDF
 import csv
+import html
 from datetime import datetime
+import ipaddress
+import os
+import secrets
+import socket
+from urllib.parse import urlparse
 
 logger = get_logger(__name__)
 
+
+def get_bool_env(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_bool_arg(value, default=True):
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_target_url(raw_url):
+    target_url = (raw_url or "").strip()
+    if not target_url:
+        return None, "No URL provided."
+
+    if not target_url.startswith(('http://', 'https://')):
+        target_url = 'http://' + target_url
+
+    parsed = urlparse(target_url)
+    if parsed.scheme not in {'http', 'https'}:
+        return None, "Only http:// and https:// targets are allowed."
+
+    if not parsed.hostname:
+        return None, "The target URL is invalid."
+
+    if parsed.username or parsed.password:
+        return None, "URLs with embedded credentials are not allowed."
+
+    return target_url, None
+
+
+def resolve_target_ips(hostname, port):
+    try:
+        ipaddress.ip_address(hostname)
+        return {hostname}
+    except ValueError:
+        pass
+
+    resolved_ips = set()
+    addrinfo = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    for entry in addrinfo:
+        resolved_ips.add(entry[4][0])
+    return resolved_ips
+
+
+def validate_scan_target(target_url):
+    normalized_url, error = normalize_target_url(target_url)
+    if error:
+        return None, error
+
+    parsed = urlparse(normalized_url)
+    hostname = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+
+    if hostname.lower() == "localhost" or hostname.lower().endswith(".local"):
+        return None, "Scanning localhost or local-only hostnames is not allowed."
+
+    try:
+        resolved_ips = resolve_target_ips(hostname, port)
+    except socket.gaierror:
+        return None, "The target hostname could not be resolved."
+    except OSError:
+        return None, "The target hostname could not be validated."
+
+    if not resolved_ips:
+        return None, "The target hostname did not resolve to a routable address."
+
+    for resolved_ip in resolved_ips:
+        ip_obj = ipaddress.ip_address(resolved_ip)
+        if not ip_obj.is_global:
+            return None, "Scanning private, loopback, link-local, or otherwise non-public IP ranges is not allowed."
+
+    return normalized_url, None
+
 app = Flask(__name__)
 setup_flask_logging(app)
-app.secret_key = "secret_key_secure_123"
+app.config['SECRET_KEY'] = os.environ.get('VIBESCANNER_SECRET_KEY') or secrets.token_hex(32)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///vibescanner.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.secret_key = app.config['SECRET_KEY']
+
+if 'VIBESCANNER_SECRET_KEY' not in os.environ:
+    logger.warning("VIBESCANNER_SECRET_KEY is not set. Using an ephemeral development secret key.")
 
 logger.info("Initializing VibeScanner application")
 
 # Initialize database
 db.init_app(app)
-with app.app_context():
-    db.create_all()
-    logger.info("Database initialized")
+init_db(app)
+logger.info("Database initialized")
 
 # Initialize Flask-Login
 login_manager = LoginManager()
@@ -46,6 +133,35 @@ class PDFReport(FPDF):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+
+def format_evidence_lines(evidence):
+    if evidence is None:
+        return []
+
+    if isinstance(evidence, dict):
+        lines = []
+        for key, value in evidence.items():
+            if isinstance(value, (dict, list)):
+                rendered_value = json.dumps(value)
+            else:
+                rendered_value = str(value)
+            lines.append(f"{key.replace('_', ' ').title()}: {rendered_value}")
+        return lines
+
+    if isinstance(evidence, list):
+        return [json.dumps(item) if not isinstance(item, str) else item for item in evidence]
+
+    return [str(evidence)]
+
+
+def format_evidence_html(evidence):
+    lines = format_evidence_lines(evidence)
+    if not lines:
+        return ""
+
+    escaped_lines = "<br>".join(html.escape(line) for line in lines)
+    return f"<p><strong>Evidence:</strong><br>{escaped_lines}</p>"
 
 @app.route('/')
 def index():
@@ -135,16 +251,18 @@ def logout():
 @login_required
 def scan_stream():
     target_url = request.args.get('url')
+    include_passive_checks = parse_bool_arg(request.args.get('include_passive_checks'), True)
     
-    if not target_url:
-        logger.warning("Scan attempted without URL")
-        return Response("data: [DONE] No URL provided.\n\n", mimetype='text/event-stream')
-
-    if not target_url.startswith(('http://', 'https://')):
-        target_url = 'http://' + target_url
+    target_url, validation_error = validate_scan_target(target_url)
+    if validation_error:
+        logger.warning(f"Rejected scan target: {validation_error}")
+        return Response(f"data: [DONE] {validation_error}\n\n", mimetype='text/event-stream')
     
-    logger.info(f"Starting scan for user {current_user.username} on {target_url}")
-    scanner = VulnerabilityScanner(target_url)
+    logger.info(
+        f"Starting scan for user {current_user.username} on {target_url} "
+        f"(include_passive_checks={include_passive_checks})"
+    )
+    scanner = VulnerabilityScanner(target_url, include_passive_checks=include_passive_checks)
     
     # Create a new scan record in the database (associated with current user)
     scan = Scan(target_url=target_url, status='in_progress', user_id=current_user.id)
@@ -161,6 +279,8 @@ def scan_stream():
         vuln_count = 0
         scan_error = False
         try:
+            yield f"data: [SCAN] {json.dumps({'scan_id': scan_id})}\n\n"
+
             # Iterate through the generator from scanner.py
             for update in scanner.run_scan():
                 # Strip newlines from update for processing
@@ -187,9 +307,12 @@ def scan_stream():
                             scan_id=scan_id,
                             type=vuln_data.get('type', 'Unknown'),
                             risk=vuln_data.get('risk', 'Low'),
-                            description=vuln_data.get('type', 'Vulnerability'),
+                            description=vuln_data.get('description', vuln_data.get('type', 'Vulnerability')),
                             affected_url=vuln_data.get('url', target_url),
-                            payload=vuln_data.get('payload', '')
+                            payload=vuln_data.get('payload', ''),
+                            confidence=vuln_data.get('confidence'),
+                            detection_method=vuln_data.get('detection_method'),
+                            evidence=json.dumps(vuln_data.get('evidence')) if vuln_data.get('evidence') is not None else None
                         )
                         db.session.add(vulnerability)
                         db.session.commit()  # Commit immediately, don't wait
@@ -285,7 +408,9 @@ def download_pdf():
     else:
         for v in results:
             # Color coding
-            if v.get('risk') == 'High':
+            if v.get('risk') == 'Critical':
+                pdf.set_text_color(255, 0, 85) # Bright red
+            elif v.get('risk') == 'High':
                 pdf.set_text_color(220, 53, 69) # Red
             elif v.get('risk') == 'Medium':
                 pdf.set_text_color(255, 193, 7) # Orange
@@ -301,6 +426,12 @@ def download_pdf():
             # Use multi_cell for long text wrapping
             pdf.multi_cell(0, 7, txt=f"URL: {v.get('affected_url', 'N/A')}")
             pdf.multi_cell(0, 7, txt=f"Payload: {v.get('payload', 'N/A')}")
+            if v.get('confidence'):
+                pdf.multi_cell(0, 7, txt=f"Confidence: {v.get('confidence')}")
+            if v.get('detection_method'):
+                pdf.multi_cell(0, 7, txt=f"Detection: {v.get('detection_method')}")
+            for evidence_line in format_evidence_lines(v.get('evidence')):
+                pdf.multi_cell(0, 7, txt=f"Evidence: {evidence_line}")
             pdf.ln(5)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y()) # Draw separator line
             pdf.ln(5)
@@ -461,10 +592,19 @@ def export_scan(scan_id):
     elif export_format == 'csv':
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(['Type', 'Risk', 'Description', 'Affected URL', 'Payload'])
+        writer.writerow(['Type', 'Risk', 'Description', 'Affected URL', 'Payload', 'Confidence', 'Detection Method', 'Evidence'])
         
         for vuln in scan.vulnerabilities:
-            writer.writerow([vuln.type, vuln.risk, vuln.description, vuln.affected_url, vuln.payload])
+            writer.writerow([
+                vuln.type,
+                vuln.risk,
+                vuln.description,
+                vuln.affected_url,
+                vuln.payload,
+                vuln.confidence,
+                vuln.detection_method,
+                vuln.evidence or ''
+            ])
         
         buffer = io.BytesIO()
         buffer.write(output.getvalue().encode('utf-8'))
@@ -503,12 +643,16 @@ def export_scan(scan_id):
         if scan.vulnerabilities:
             for vuln in scan.vulnerabilities:
                 risk_class = vuln.risk.lower()
+                evidence_html = format_evidence_html(vuln.to_dict().get('evidence'))
                 html_content += f"""
                 <div class="vulnerability {risk_class}">
                     <h3>[{vuln.risk}] {vuln.type}</h3>
-                    <p><strong>URL:</strong> {vuln.affected_url}</p>
-                    <p><strong>Description:</strong> {vuln.description}</p>
-                    <p><strong>Payload:</strong> <code>{vuln.payload}</code></p>
+                    <p><strong>URL:</strong> {html.escape(vuln.affected_url or 'N/A')}</p>
+                    <p><strong>Description:</strong> {html.escape(vuln.description or '')}</p>
+                    <p><strong>Payload:</strong> <code>{html.escape(vuln.payload or 'N/A')}</code></p>
+                    <p><strong>Confidence:</strong> {html.escape(vuln.confidence or 'N/A')}</p>
+                    <p><strong>Detection Method:</strong> {html.escape(vuln.detection_method or 'N/A')}</p>
+                    {evidence_html}
                 </div>
                 """
         else:
@@ -529,51 +673,7 @@ def export_scan(scan_id):
     
     return jsonify({'error': 'Invalid format'}), 400
 
-@app.route('/api/debug/scans', methods=['GET'])
-@login_required
-def debug_scans():
-    """Debug endpoint to check database state"""
-    scans = Scan.query.filter_by(user_id=current_user.id).all()
-    
-    result = []
-    for scan in scans:
-        vuln_count = Vulnerability.query.filter_by(scan_id=scan.id).count()
-        result.append({
-            'id': scan.id,
-            'url': scan.target_url,
-            'status': scan.status,
-            'total_vulnerabilities_stored': scan.total_vulnerabilities,
-            'actual_vulns_in_db': vuln_count,
-            'scan_date': scan.scan_date.isoformat()
-        })
-    
-    return jsonify({'scans': result})
-
-@app.route('/api/scan/<int:scan_id>/sync', methods=['POST'])
-@login_required
-def sync_scan(scan_id):
-    """Manually sync scan data with database"""
-    scan = Scan.query.get_or_404(scan_id)
-    if scan.user_id != current_user.id:
-        return jsonify({'error': 'Unauthorized'}), 403
-    
-    # Count actual vulnerabilities
-    vuln_count = Vulnerability.query.filter_by(scan_id=scan_id).count()
-    
-    # Update scan
-    if scan.status == 'in_progress' and vuln_count > 0:
-        scan.status = 'completed'
-    
-    scan.total_vulnerabilities = vuln_count
-    db.session.commit()
-    
-    return jsonify({
-        'message': 'Sync completed',
-        'status': scan.status,
-        'vulnerabilities': vuln_count
-    })
-
 if __name__ == '__main__':
     # Threaded=True is important for the streaming to work smoothly
     logger.info("Starting VibeScanner Flask application")
-    app.run(debug=True, threaded=True)
+    app.run(debug=get_bool_env('FLASK_DEBUG', False), threaded=True)
